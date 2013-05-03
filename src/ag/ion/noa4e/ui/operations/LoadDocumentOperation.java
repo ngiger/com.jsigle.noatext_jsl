@@ -69,8 +69,13 @@ import ag.ion.bion.officelayer.document.IDocumentService; //20120222js: To suppo
 import ag.ion.bion.officelayer.text.ITextDocument;
 import ag.ion.noa.frame.ILayoutManager; //20120222js: To support disabling menus items and open dialogs which would cause the Elexis/OO to hang
 
+import ag.ion.noa4e.internal.ui.preferences.LocalOfficeApplicationPreferencesPage; //20130310js: To support control of js threaded watchdog from NOAText_jsl preferences dialog.
+
 import ch.elexis.Desk;
+import ch.elexis.Hub;
 import ch.elexis.util.SWTHelper;
+import ch.elexis.preferences.PreferenceConstants; 		 //20130310js: To support control of js threaded watchdog from NOAText_jsl preferences dialog.
+import ch.elexis.preferences.SettingsPreferenceStore;	 //20130310js: To support control of js threaded watchdog from NOAText_jsl preferences dialog.
 
 import com.sun.star.frame.XLayoutManager; //20120222js: To support disabling menus items and open dialogs which would cause the Elexis/OO to hang
 import com.sun.star.frame.XFrame; //20120222js: To support disabling menus items and open dialogs which would cause the Elexis/OO to hang
@@ -83,6 +88,7 @@ import org.eclipse.core.runtime.IProgressMonitor;
 
 import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.jface.operation.IRunnableWithProgress;
+import org.eclipse.jface.preference.IPreferenceStore;
 import org.eclipse.swt.widgets.Shell;
 
 import java.io.InputStream;
@@ -143,66 +149,103 @@ public class LoadDocumentOperation implements IRunnableWithProgress {
 		 * @author Andreas Br�ker
 		 */
 		public void run() {
+			System.out.println("LoadDocumentOperation: ***************************");
 			System.out.println("LoadDocumentOperation: InternalThread: run: begins");
+			System.out.println("LoadDocumentOperation: ***************************");
 			try {
-				System.out.println("LoadDocumentOperation: InternalThread: run: Trying to do work...");
+				
+				System.out.println("LoadDocumentOperation: InternalThread: run: Trying to do work... Do we already know have a valid frame?");
+				if (frame == null)	System.out.println("LoadDocumentOperation: InternalThread: run: frame==null");
+				else				System.out.println("LoadDocumentOperation: InternalThread: run: frame=="+frame.toString());
+
 				if (useStream || inputStream != null) {
-					System.out.println("LoadDocumentOperation: InternalThread: run: useStream || inputStream != null");
+					System.out.println("LoadDocumentOperation: InternalThread: run: useStream || inputStream != null  --- opening a document from an inputStream");
 					InputStream inputStream = null;
 					if (LoadDocumentOperation.this.inputStream != null)
 						inputStream = LoadDocumentOperation.this.inputStream;
 					else
 						inputStream = url.openStream();
-					if (frame != null)
+					
+					//20130219js noatext_jsl 1.4.7:
+					//These lines of code here are apparently never executed, at least when I open an existing Document.
+					//So for debugging, it makes NO sense to replace the following line loading a document into a frame
+					//by a corresponding line that would alternatively load it into a new window (but look for TAKE 2 below there it works):
+					//
+					//System.out.println("LoadDocumentOperation: InternalThread: run: ********************************************************************");
+					//System.out.println("LoadDocumentOperation: InternalThread: run: DELIBERATELY LOADING NOT INTO FRAME FOR DEBUGGING PURPOSES - TAKE 1.");
+					//System.out.println("LoadDocumentOperation: InternalThread: run: ********************************************************************");
+					//
+					if (frame != null) {
+						System.out.println("LoadDocumentOperation: InternalThread: run: PRE1 - about to load a document from inputStream into the frame");
+						// The original line which is probably not executed, so its replacing does not cause an effect for debugging:
+						// ORIGINAL LINE: MAY BE DISABLED FOR DEBUGGING ONLY: 
 						document = officeApplication.getDocumentService().loadDocument(frame, inputStream, documentDescriptor);
-					else
+						// ALTERNATIVE LINE: WILL NOT LOAD TO A FRAME BUT INTO A NEW WINDOW - FOR DEBUGGING ONLY:
+						// document = officeApplication.getDocumentService().loadDocument(inputStream, documentDescriptor);
+						System.out.println("LoadDocumentOperation: InternalThread: run: POST1 - loaded a document from inputStream into the frame");
+						}
+					else {
+						System.out.println("LoadDocumentOperation: InternalThread: run: PRE1 FALLBACK - about to load a document from inputStream NOT into a frame, but into a new window");
 						document = officeApplication.getDocumentService().loadDocument(inputStream, documentDescriptor);
+						System.out.println("LoadDocumentOperation: InternalThread: run: POST1 FALLBACK - loaded a document from inputStream NOT into a frame, but into a new window");
+						}
+					
 					try {
 						inputStream.close();
 					} catch (Throwable throwable) {
 						// do not consume
 					}
 				} else {
-					System.out.println("LoadDocumentOperation: InternalThread: run: NOT (useStream || inputStream != null)");
+					System.out.println("LoadDocumentOperation: InternalThread: run: NOT (useStream || inputStream != null)  --- opening a document from a file (or a URL)");
 					System.out.println("LoadDocumentOperation: InternalThread: run: Status before loadDocument()...");
 
 					if (officeApplication == null)
 						System.out.println("LoadDocumentOperation: InternalThread: run: officeApplication==null");
 					else
 						System.out.println("LoadDocumentOperation: InternalThread: run: officeApplication=" + officeApplication.toString());
+					
 					if (url == null)
 						System.out.println("LoadDocumentOperation: InternalThread: run: url==null");
 					else
 						System.out.println("LoadDocumentOperation: InternalThread: run: url=" + url.toString());
+					
 					if (frame == null)
 						System.out.println("LoadDocumentOperation: InternalThread: run: frame==null");
 					else
 						System.out.println("LoadDocumentOperation: InternalThread: run: frame=" + frame.toString());
+
 					if (documentDescriptor == null)
 						System.out.println("LoadDocumentOperation: InternalThread: run: documentDescriptor==null");
 					else
 						System.out.println("LoadDocumentOperation: InternalThread: run: documentDescriptor=" + documentDescriptor.toString());
 
+					// 201302200257js:
+					// Wenn ich *nachfolgend* (siehe TAKE 2) nicht korrekt in einen frame lade,
+					// sondern in ein (implizites, wenn kein Ziel-Frame genannt wird) neues Fenster -
+					// dann macht das in Linux den Unterschied, ob das Dokument sichtbar erscheint, oder nicht.
+					// Will sagen: In ein neues Fenster kann ich einen Brief zum Bearbeiten so laden, dass es sichtbar und editierbaer wird,
+					// aber nicht in einen Frame - da würden zwar die Log Meldungen alle ganz normal sein, aber statt dass Inhalt und Editor
+					// erscheinen, würde der Frame erst mal nur grau bleiben. Das nur in Linux, nicht in Windows.
+					
 					// 201202222250js:
-					// Wenn ich immer NICHT nach frame lade, dann steht Elexis
-					// nach dem Beginn des Ladens, wenn in OO ein Fenster wie
-					// Druckformatvorlage offen war,
-					// zwar auch - aber nach dem Beenden von Elexis (mit Fehler:
-					// Elexis reagiert nicht) folgt dann kein identischer
-					// Abbruch von OO,
-					// sondern OO ist mit dem Dokument als eigenes Fenster
-					// vorhanden, und das offene Druckformatvorlage-Fenster
-					// auch.
-					// Also vermutlich will das Druckformatvorlagen-Fenster vor
-					// allem nicht in den Frame?
-					// Oder, das nicht binden an den Frame schützt das
-					// halboffene OpenOffice vor den Folgen des Abschusses des
+					// Wenn ich immer NICHT nach frame lade, dann steht Elexis nach dem Beginn des Ladens, wenn in OO ein Fenster wie
+					// Druckformatvorlage offen war, zwar auch - aber nach dem Beenden von Elexis (mit Fehler: Elexis reagiert nicht)
+					// folgt dann kein identischer Abbruch von OO, sondern OO ist mit dem Dokument als eigenes Fenster
+					// vorhanden, und das offene Druckformatvorlage-Fenster auch.
+					// Also vermutlich will das Druckformatvorlagen-Fenster vor allem nicht in den Frame?
+					// Oder, das nicht binden an den Frame schützt das halboffene OpenOffice vor den Folgen des Abschusses des
 					// stehenden Elexis?
 					System.out.println("LoadDocumentOperation: InternalThread: run: officeApplication.getDesktopService()="
 							+ officeApplication.getDesktopService());
 					System.out.println("LoadDocumentOperation: InternalThread: run: officeApplication.getDesktopService().getFramesCount()="
 							+ officeApplication.getDesktopService().getFramesCount());
-
+					
+					if (officeApplication.getDesktopService().getFramesCount()>1) {
+						System.out.println("LoadDocumentOperation: InternalThread: run: WARNING: !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+						System.out.println("LoadDocumentOperation: InternalThread: run: WARNING: getFramesCount()>1, so you probably have multiple (invisible) Office frames open!");
+						System.out.println("LoadDocumentOperation: InternalThread: run: WARNING: !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+					};
+								
 					// Es gibt unter getApplicationInfo() auch Methoden, um
 					// einzelne Infos oder z.B. die Info, ob der initial config
 					// wizard gelaufen ist etc. herauszulesen:
@@ -211,10 +254,11 @@ public class LoadDocumentOperation implements IRunnableWithProgress {
 
 					if (frame != null) {
 
+						System.out.println();
 						System.out
 								.println("LoadDocumentOperation: InternalThread: run: TO DO: !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
 						System.out
-								.println("LoadDocumentOperation: InternalThread: run: TO DO: MOVE THE disableDispatch and layoutManager stuff to a better place!");
+								.println("LoadDocumentOperation: InternalThread: run: TO DO: Please consider moving the disableDispatch and layoutManager stuff to a better place!");
 						System.out
 								.println("LoadDocumentOperation: InternalThread: run: TO DO: (Or maybe not - LayoutManager stuff only effective after the docLoad?)");
 						System.out
@@ -257,6 +301,7 @@ public class LoadDocumentOperation implements IRunnableWithProgress {
 						// http://ubion.ion.ag/mainForumFolder/oiep_forum/0053/
 						// Now it is time to disable two commands in the frame
 						// This comes from snippet14
+						
 						frame.disableDispatch(GlobalCommands.NEW_DOCUMENT);
 						// frame.disableDispatch(GlobalCommands.NEW_MENU); ??js
 						frame.disableDispatch(GlobalCommands.CLOSE_DOCUMENT);
@@ -312,6 +357,7 @@ public class LoadDocumentOperation implements IRunnableWithProgress {
 						// Das folgende wirkt hier oben anscheinend nicht bis
 						// nach dem loadDocument():
 						ILayoutManager layoutManager = frame.getLayoutManager();
+
 						layoutManager.hideAll(); // 201202230412js: This becomes
 													// effective immediately.
 													// But maybe it doesn't help
@@ -356,6 +402,7 @@ public class LoadDocumentOperation implements IRunnableWithProgress {
 						// officeApplication.getDocumentService().constructNewDocument(frame,
 						// IDocument.WRITER, documentDescriptor);
 
+						
 						XFrame xFrame = frame.getXFrame();
 						XPropertySet xPropSet = (XPropertySet) UnoRuntime.queryInterface(XPropertySet.class, xFrame);
 						XLayoutManager xLayoutManager = (XLayoutManager) UnoRuntime.queryInterface(XLayoutManager.class,
@@ -373,19 +420,86 @@ public class LoadDocumentOperation implements IRunnableWithProgress {
 
 						// System.out.println("findFrame(\"Formatvorlagen\"):"+xFrame.findFrame("Formatvorlagen",com.sun.star.frame.FrameSearchFlag.ALL).getName());
 
-						System.out.println("LoadDocumentOperation: PRE");
+						
+						System.out.println("LoadDocumentOperation: InternalThread: run: *******************************************************");
+						System.out.println("LoadDocumentOperation: InternalThread: run: PRE2 - about to load a document from url into the frame");
+						System.out.println("LoadDocumentOperation: InternalThread: run: *******************************************************");
+						
+						// Das hier würde auch gehen, da loadDocument() eine Methode von IDocumentService ist,
+						// und selbst ein IDocument zurückgibt. Dann gäbe es aber keine interims-Debug-Outputs. 
 						// document =
 						// officeApplication.getDocumentService().loadDocument(frame,
 						// url.toString(), documentDescriptor);
 
 						IDocumentService documentService = officeApplication.getDocumentService();
-						if (documentService == null)	System.out.println("LoadDocumentOperation: officeApplication.getDocumentService()==null");
-						else							System.out.println("LoadDocumentOperation: officeApplication.getDocumentService()="
-																			+ officeApplication.getDocumentService());
+						
+						if (documentService == null)	System.out.println("LoadDocumentOperation: InternalThread: run: documentService()==null");
+						else							System.out.println("LoadDocumentOperation: InternalThread: run: documentService()="+ documentService.toString());
+						
+						System.out.println("LoadDocumentOperation: InternalThread: run: documentService.MAX_OPENED_DOCS:           "+documentService.MAX_OPENED_DOCS);
+						System.out.println("LoadDocumentOperation: InternalThread: run: documentService.getCurrentDocumentCount(): "+documentService.getCurrentDocumentCount());
+						if (documentService.getCurrentDocumentCount()>1) {
+							System.out.println("LoadDocumentOperation: InternalThread: run: WARNING: !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+							System.out.println("LoadDocumentOperation: InternalThread: run: WARNING: getCurrentDocumentCount()>1, so you probably have multiple (invisible) Office documents open!");
+							System.out.println("LoadDocumentOperation: InternalThread: run: WARNING: !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+						};
+						//System.out.println("LoadDocumentOperation: documentService.getCurrentDocuments():     "+documentService.getCurrentDocuments().toString());
+
+						if (frame == null)				System.out.println("LoadDocumentOperation: InternalThread: run: frame==null");
+						else							System.out.println("LoadDocumentOperation: InternalThread: run: frame=" + frame.toString());
+
+						if (documentDescriptor == null)	System.out.println("LoadDocumentOperation: InternalThread: run: documentDescriptor==null");
+						else							System.out.println("LoadDocumentOperation: InternalThread: run: documentDescriptor=" + documentDescriptor.toString());						
+						
+						//201302200300js:
+						//See comments further above - loading NOT into a frame is for debugging only.
+						//In Linux, this will show an editable document in a new window, whereas loading into a frame
+						//will return only a gray frame without any content or editing abilities
+						//(only the frame name in the tab will appear as expected).
+
+						//System.out.println("LoadDocumentOperation: InternalThread: run: ********************************************************************");
+						//System.out.println("LoadDocumentOperation: InternalThread: run: DELIBERATELY LOADING NOT INTO FRAME FOR DEBUGGING PURPOSES - TAKE 2.");
+						//System.out.println("LoadDocumentOperation: InternalThread: run: ********************************************************************");
+						
+						// ORIGINAL LINE: MAY BE DISABLED FOR DEBUGGING ONLY: 
+						System.out.println("LoadDocumentOperation: InternalThread: run: ********************************************************************");
+						System.out.println("LoadDocumentOperation: InternalThread: run: CAVE: THIS documentService.loadDocument(frame...) MAY LEAD TO A METHOD THAT EXPECTS XFrame, not frame!!!");
+						System.out.println("LoadDocumentOperation: InternalThread: run: ********************************************************************");	 
 						document = documentService.loadDocument(frame, url.toString(), documentDescriptor);
+						// ALTERNATIVE LINE: WILL NOT LOAD TO A FRAME BUT INTO A NEW WINDOW - FOR DEBUGGING ONLY:
+						// document = documentService.loadDocument(url.toString(), documentDescriptor);
+						
+						System.out.println("LoadDocumentOperation: InternalThread: run: *************************************************");
+						System.out.println("LoadDocumentOperation: InternalThread: run: POST2 - loaded a document from url into the frame");
+						System.out.println("LoadDocumentOperation: InternalThread: run: *************************************************");
 
-						System.out.println("LoadDocumentOperation: POST");
+						// Aus irgendeinem Grunde erscheint das Dokument (in Linux) NICHT in dem Frame mit der in frame übergebenen ID:
+						System.out.println("LoadDocumentOperation: InternalThread: run: frame:                           "+frame.toString());
+						System.out.println("LoadDocumentOperation: InternalThread: run: frame.getXFrame():               "+frame.getXFrame().toString());
+						System.out.println("LoadDocumentOperation: InternalThread: run: document.getFrame():             "+document.getFrame().toString());
+						System.out.println("LoadDocumentOperation: InternalThread: run: document.getFrame().getXFrame(): "+document.getFrame().getXFrame().toString());
+						System.out.println("LoadDocumentOperation: InternalThread: run: document.getDocumentType():      "+document.getDocumentType());
+						System.out.println("LoadDocumentOperation: InternalThread: run: document.getLocationURL():       "+document.getLocationURL().toString());
+						
+						System.out.println("LoadDocumentOperation: InternalThread: run: documentDescriptor.getURL():     "+documentDescriptor.getURL());
+						System.out.println("LoadDocumentOperation: InternalThread: run: documentDescriptor.getTitle():   "+documentDescriptor.getTitle());
+						
 
+						//20130220js MAL SCHAUEN, OB WIR DEN FRAMEINHALT in linux hervorzaubern können:
+						//Das hier hilft alles nichts:
+						//document.getFrame().setFocus();
+						//document.getFrame().updateDispatches();
+						//frame.notifyAll();
+						//frame.setFocus();
+						//frame.updateDispatches();
+						//frame.wait();
+						//frame.close(); //Das sorgt dafür, dass das Dokument mit ark geöffnet wird - wie nach dem Schliessen des letzten OfficeWindows
+						//document.fireDocumentEvent(IDocument.EVENT_ON_LOAD_DONE);
+						//document.fireDocumentEvent(IDocument.EVENT_ON_LOAD_FINISHED);
+						//document.fireDocumentEvent(IDocument.EVENT_ON_FOCUS);
+						//document.notifyAll();
+												
+						
 						// Das folgende (showElement zumindest) wirkt von weiter
 						// oben NICHT bis nach dem loadDocument() (NOCHMAL
 						// getestet, stimmt!):
@@ -433,9 +547,14 @@ public class LoadDocumentOperation implements IRunnableWithProgress {
 						xLayoutManager.dockAllWindows(com.sun.star.ui.UIElementType.STATUSBAR);
 						xLayoutManager.dockAllWindows(com.sun.star.ui.UIElementType.PROGRESSBAR);
 						xLayoutManager.dockAllWindows(com.sun.star.ui.UIElementType.UNKNOWN);
-
+						
+						
 					} else
+						{
+						System.out.println("LoadDocumentOperation: InternalThread: run: PRE2 FALLBACK - about to load a document from url NOT into a frame, but into a new window");
 						document = officeApplication.getDocumentService().loadDocument(url.toString(), documentDescriptor);
+						System.out.println("LoadDocumentOperation: InternalThread: run: POST2 FALLBACK - loaded a document from url NOT into a frame, but into a new window");
+						}
 
 					System.out.println("LoadDocumentOperation: InternalThread: run: Status after loadDocument()...");
 					if (document == null)
@@ -864,8 +983,19 @@ public class LoadDocumentOperation implements IRunnableWithProgress {
 			
 			System.out.println("LoadDocumentOperation: cyclesWaitedForInternalThreadToComplete: "+cyclesWaitedForInternalThreadToComplete);
 
-			int cyclesWatchdogMaximumAllowedHalfSecs = 40;
 			
+			//20130310js: Introduced in NOAText_jsl Version 1.4.8:
+            //The timeout setting for the threaded watchdog is user configurable via the NOAText_jsl configuration dialog.
+			//I don't want to read it from the preferenceStore directly, because we would have to do that in every cycle,
+			//and it includes some string manipulation, needs 3 imports, and accessing a public static variable over there for the default value etc.
+			//Instead, I have created a public static variable over there to provide the desired numeric value directly.
+			int cyclesWatchdogMaximumAllowedHalfSecs=LocalOfficeApplicationPreferencesPage.getTimeoutThreadedWatchdog();
+			System.out.println("LoadDocumentOperation: Threaded watchdog timeout from NOAText_jsl preferences: "+cyclesWatchdogMaximumAllowedHalfSecs);
+			
+			if (cyclesWatchdogMaximumAllowedHalfSecs==0) {
+				System.out.println("LoadDocumentOperation: Please note: Threaded watchdog = 0 means it has been disabled.");				
+			}
+			else
 			if (cyclesWaitedForInternalThreadToComplete>cyclesWatchdogMaximumAllowedHalfSecs) {
 				cyclesWaitedForInternalThreadToComplete=-1; //Paranoia: Damit der nächste Thread.destroy() ggf. nicht schon in 0.5 Sek zuschlagen kann...
 				
@@ -983,7 +1113,7 @@ public class LoadDocumentOperation implements IRunnableWithProgress {
 			
 		}
 
-		System.out.println("LoadDocumentOperation: run 3 TO DO: Thread.sleep(3000) [WARNING: REMOVED SLEEP()], otherwise OO 3.x might crash (says comment in code)");
+		System.out.println("LoadDocumentOperation: run 3 TO DO / WARNING: REMOVED Thread.sleep(3000) here - but comment in code says that this might cause OOo 3.x to crash");
 		// sleep here for a while otherwise OOo 3.x might crash
 		//Thread.sleep(3000);
 		System.out.println("LoadDocumentOperation: run 4 sleep ends");
